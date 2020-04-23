@@ -5,37 +5,26 @@
 [![Telegram Channel](https://img.shields.io/badge/Telegram%20Channel-brookchannel-blue.svg)](https://t.me/brookchannel)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-yellow.svg)](http://www.gnu.org/licenses/gpl-3.0)
 [![Wiki](https://img.shields.io/badge/docs-wiki-yellow.svg)](https://github.com/txthinking/brook/wiki)
-[![Financial Contributors on Open Collective](https://opencollective.com/brook/all/badge.svg?label=financial+contributors)](https://opencollective.com/brook)
 
 <p align="center">
-    <img style="float:right;" src="https://storage.googleapis.com/txthinking-file/_/brook.png" alt="Brook"/>
+    <img style="float:right;" src="https://storage.googleapis.com/txthinking/_/brook.png" alt="Brook"/>
 </p>
 
 ---
 
-### v20200102
-
-- **🔊 Please uninstall or delete the old GUI client first❗️**
-- Add Brook WebSocket mode, with or without TLS. If with TLS, Brook will automatically request/issue certificate for your domain.
-- GUI Client supports QR scanning
-- GUI Client supports custom rules
-- macOS Client renamed to Brook.pkg (Because many users don't know that needed to copy or drag from dmg)
-- Windows Client renamed to Brook.msi
-- develop branch is deleted, PR to master and keep master stable
-- Keep it simple, stupid
+* Telegram Group: https://t.me/brookgroup join to chat in English, Chinese, etc and help each other
+* Telegram Channel: https://t.me/brookchannel join to receive important update
 
 ---
 
 ### Table of Contents
 
 - [What is Brook](#what-is-brook)
-- [Download](#download)
-- [Packages](#packages)
+- [Install](#install-via-nami)
 - [**Server**](#server)
 - [**Client**](#client)
 - [WSServer](#wsserver)
 - [WSClient](#wsclient)
-- [**GUI Client**](#gui-client)
 - [Tunnel](#tunnel)
 - [Tproxy](#tproxy)
 - [VPN](#vpn)
@@ -51,49 +40,37 @@
 Brook is a cross-platform proxy/vpn software.<br/>
 Brook's goal is to keep it **simple**, **stupid** and **not detectable**.
 
-## Download
+### Install via [nami](https://github.com/txthinking/nami)
 
-| Download                                                                                                                         | Server/Client   | OS      | Arch               | Remark |
-| -------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------- | ------------------ | ------ |
-| [brook](https://github.com/txthinking/brook/releases/download/v20200102/brook)                                                   | Server & Client | Linux   | amd64              | CLI    |
-| [brook_linux_386](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_386)                               | Server & Client | Linux   | 386                | CLI    |
-| [brook_linux_arm64](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_arm64)                           | Server & Client | Linux   | arm64              | CLI    |
-| [brook_linux_arm5](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_arm5)                             | Server & Client | Linux   | arm5               | CLI    |
-| [brook_linux_arm6](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_arm6)                             | Server & Client | Linux   | arm6               | CLI    |
-| [brook_linux_arm7](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_arm7)                             | Server & Client | Linux   | arm7               | CLI    |
-| [brook_linux_mips](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips)                             | Server & Client | Linux   | mips               | CLI    |
-| [brook_linux_mipsle](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mipsle)                         | Server & Client | Linux   | mipsle             | CLI    |
-| [brook_linux_mips_softfloat](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips_softfloat)         | Server & Client | Linux   | mips_softfloat     | CLI    |
-| [brook_linux_mipsle_softfloat](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mipsle_softfloat)     | Server & Client | Linux   | mipsle_softfloat   | CLI    |
-| [brook_linux_mips64](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips64)                         | Server & Client | Linux   | mips64             | CLI    |
-| [brook_linux_mips64le](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips64le)                     | Server & Client | Linux   | mips64le           | CLI    |
-| [brook_linux_mips64_softfloat](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips64_softfloat)     | Server & Client | Linux   | mips64_softfloat   | CLI    |
-| [brook_linux_mips64le_softfloat](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_mips64le_softfloat) | Server & Client | Linux   | mips64le_softfloat | CLI    |
-| [brook_linux_ppc64](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_ppc64)                           | Server & Client | Linux   | ppc64              | CLI    |
-| [brook_linux_ppc64le](https://github.com/txthinking/brook/releases/download/v20200102/brook_linux_ppc64le)                       | Server & Client | Linux   | ppc64le            | CLI    |
-| [brook_darwin_amd64](https://github.com/txthinking/brook/releases/download/v20200102/brook_darwin_amd64)                         | Server & Client | macOS   | amd64              | CLI    |
-| [brook_windows_amd64.exe](https://github.com/txthinking/brook/releases/download/v20200102/brook_windows_amd64.exe)               | Server & Client | Windows | amd64              | CLI    |
-| [brook_windows_386.exe](https://github.com/txthinking/brook/releases/download/v20200102/brook_windows_386.exe)                   | Server & Client | Windows | 386                | CLI    |
-| [Brook.pkg](https://github.com/txthinking/brook/releases/download/v20200102/Brook.pkg)                                           | Client          | macOS   | amd64              | GUI    |
-| [Brook.msi](https://github.com/txthinking/brook/releases/download/v20200102/Brook.msi)                                           | Client          | Windows | amd64              | GUI    |
-| [App Store](https://itunes.apple.com/us/app/brook-brook-shadowsocks-vpn-proxy/id1216002642)                                      | Client          | iOS     | -                  | GUI    |
-| [Brook.apk](https://github.com/txthinking/brook/releases/download/v20200102/Brook.apk)(No Google Play)                           | Client          | Android | -                  | GUI    |
-
-**See [wiki](https://github.com/txthinking/brook/wiki) for more tutorials**
-
-## Packages
-
-### ArchLinux
+install CLI using nami on Linux/BSD/macOS
 
 ```
-sudo pacman -S brook
+nami install github.com/txthinking/brook
 ```
 
-### macOS(GUI)
+or install CLI on Archlinux
+
+```
+pacman -S brook
+```
+
+or install CLI using go get
+
+```
+go get github.com/txthinking/brook/cli/brook
+```
+
+or download CLI from [releases](https://github.com/txthinking/brook/releases)
+
+or install GUI on macOS
 
 ```
 brew cask install brook
 ```
+
+or download GUI: [macOS](https://github.com/txthinking/brook/releases/download/v20200201/Brook.pkg), [Windows](https://github.com/txthinking/brook/releases/download/v20200201/Brook.msi), [Android](https://github.com/txthinking/brook/releases/download/v20200201/Brook.apk), [iOS](https://apps.apple.com/us/app/brook-a-cross-platform-proxy/id1216002642)
+
+> CLI contains server and client, GUI only contains client. iOS client only supports non-China AppStore.
 
 ## Brook
 
@@ -105,7 +82,7 @@ USAGE:
    brook [global options] command [command options] [arguments...]
 
 VERSION:
-   20200101
+   20200201
 
 COMMANDS:
    server        Run as server mode
@@ -160,9 +137,11 @@ $ brook client -l 127.0.0.1:1080 -i 127.0.0.1 -s server_address:port -p password
 ```
 
 ```
-# Run as brook client, start a http(s) proxy http(s)://127.0.0.1:8080
+# Run as brook client, start a http proxy http://127.0.0.1:8080
 $ brook client -l 127.0.0.1:8080 -i 127.0.0.1 -s server_address:port -p password --http
 ```
+
+download GUI client from [releases](https://github.com/txthinking/brook/releases)
 
 ### WSServer
 
@@ -190,10 +169,6 @@ $ brook wsclient -l 127.0.0.1:1080 -i 127.0.0.1 -s ws://1.2.3.4:5 -p password
 # Run as brook wsclient, connect brook wsserver with tls
 $ brook wsclient -l 127.0.0.1:1080 -i 127.0.0.1 -s wss://txthinking.com:443 -p password
 ```
-
-### GUI Client
-
-See [download](https://github.com/txthinking/brook#download)
 
 #### Tunnel
 
@@ -269,29 +244,6 @@ $ brook ssclient -l 127.0.0.1:8080 -i 127.0.0.1 -s server_address:port -p passwo
 ## Contributing
 
 Please read [CONTRIBUTING.md](https://github.com/txthinking/brook/blob/master/.github/CONTRIBUTING.md) first
-
-## Financial Contributors [Experimental]
-
-Become a financial contributor and help us sustain our community. \[[Contribute](https://opencollective.com/brook/contribute)]
-
-#### Individuals
-
-<a href="https://opencollective.com/brook"><img src="https://opencollective.com/brook/individuals.svg?width=890"></a>
-
-#### Organizations
-
-Support this project with your organization. Your logo will show up here with a link to your website. \[[Contribute](https://opencollective.com/brook/contribute)]
-
-<a href="https://opencollective.com/brook/organization/0/website"><img src="https://opencollective.com/brook/organization/0/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/1/website"><img src="https://opencollective.com/brook/organization/1/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/2/website"><img src="https://opencollective.com/brook/organization/2/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/3/website"><img src="https://opencollective.com/brook/organization/3/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/4/website"><img src="https://opencollective.com/brook/organization/4/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/5/website"><img src="https://opencollective.com/brook/organization/5/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/6/website"><img src="https://opencollective.com/brook/organization/6/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/7/website"><img src="https://opencollective.com/brook/organization/7/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/8/website"><img src="https://opencollective.com/brook/organization/8/avatar.svg"></a>
-<a href="https://opencollective.com/brook/organization/9/website"><img src="https://opencollective.com/brook/organization/9/avatar.svg"></a>
 
 ## License
 

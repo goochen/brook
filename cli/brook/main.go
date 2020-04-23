@@ -37,7 +37,7 @@ var debugAddress string
 func main() {
 	app := cli.NewApp()
 	app.Name = "Brook"
-	app.Version = "20200102"
+	app.Version = "20200201"
 	app.Usage = "A Cross-Platform Proxy/VPN Software"
 	app.Authors = []*cli.Author{
 		{
@@ -174,7 +174,7 @@ func main() {
 		},
 		&cli.Command{
 			Name:  "client",
-			Usage: "Run as client mode",
+			Usage: "Run as client with brook server",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:    "listen",
@@ -302,7 +302,7 @@ func main() {
 		},
 		&cli.Command{
 			Name:  "wsclient",
-			Usage: "Run as websocket client mode",
+			Usage: "Run as websocket client with brook wsserver",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:    "listen",
@@ -375,7 +375,7 @@ func main() {
 		},
 		&cli.Command{
 			Name:  "tunnel",
-			Usage: "Run as tunnel mode on client-site",
+			Usage: "Run as tunnel with brook server on client-site",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:    "listen",
@@ -435,13 +435,13 @@ func main() {
 			},
 		},
 		&cli.Command{
-			Name:  "tproxy",
-			Usage: "Run as tproxy mode on client-site, transparent proxy, only works on Linux",
+			Name:  "dns",
+			Usage: "Run DNS server with brook server",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:    "listen",
 					Aliases: []string{"l"},
-					Usage:   "Client listen address, like: 127.0.0.1:1080",
+					Usage:   "Client listen address, like: 127.0.0.1:53",
 				},
 				&cli.StringFlag{
 					Name:    "server",
@@ -452,6 +452,85 @@ func main() {
 					Name:    "password",
 					Aliases: []string{"p"},
 					Usage:   "Server password",
+				},
+				&cli.StringFlag{
+					Name:  "defaultDNSServer",
+					Usage: "Default DNS server",
+					Value: "8.8.8.8:53",
+				},
+				&cli.StringFlag{
+					Name:  "listDNSServer",
+					Usage: "DNS server for resolving domain in list",
+					Value: "223.5.5.5:53",
+				},
+				&cli.StringFlag{
+					Name:  "list",
+					Usage: "https://, http:// or file://",
+					Value: "https://blackwhite.txthinking.com/white.list",
+				},
+				&cli.IntFlag{
+					Name:  "tcpTimeout",
+					Value: 60,
+					Usage: "connection tcp keepalive timeout (s)",
+				},
+				&cli.IntFlag{
+					Name:  "tcpDeadline",
+					Value: 0,
+					Usage: "connection deadline time (s)",
+				},
+				&cli.IntFlag{
+					Name:  "udpDeadline",
+					Value: 60,
+					Usage: "connection deadline time (s)",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				if c.String("listen") == "" || c.String("server") == "" || c.String("password") == "" {
+					cli.ShowCommandHelp(c, "dns")
+					return nil
+				}
+				if debug {
+					enableDebug()
+				}
+				s, err := brook.NewDNS(c.String("listen"), c.String("server"), c.String("password"), c.String("defaultDNSServer"), c.String("listDNSServer"), c.String("list"), c.Int("tcpTimeout"), c.Int("tcpDeadline"), c.Int("udpDeadline"))
+				if err != nil {
+					return err
+				}
+				go func() {
+					sigs := make(chan os.Signal, 1)
+					signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+					<-sigs
+					s.Shutdown()
+				}()
+				return s.ListenAndServe()
+			},
+		},
+		&cli.Command{
+			Name:  "tproxy",
+			Usage: "Run as tproxy mode on client-site, transparent proxy, only works on Linux",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    "listen",
+					Aliases: []string{"l"},
+					Usage:   "Client listen address, don't contain IP, just like: :1080",
+				},
+				&cli.StringFlag{
+					Name:    "server",
+					Aliases: []string{"s"},
+					Usage:   "Server address, like: 1.2.3.4:1080",
+				},
+				&cli.StringFlag{
+					Name:    "password",
+					Aliases: []string{"p"},
+					Usage:   "Server password",
+				},
+				&cli.BoolFlag{
+					Name:  "letBrookDoAllForMe",
+					Usage: "See more: https://github.com/txthinking/brook/wiki/How-to-run-transparent-proxy-on-Linux%3F",
+				},
+				&cli.BoolFlag{
+					Name:  "cleanBrookDidForMe",
+					Usage: "See more: https://github.com/txthinking/brook/wiki/How-to-run-transparent-proxy-on-Linux%3F",
 				},
 				&cli.IntFlag{
 					Name:  "tcpTimeout",
@@ -481,10 +560,39 @@ func main() {
 				if err != nil {
 					return err
 				}
+				if c.Bool("cleanBrookDidForMe") {
+					if err := s.ClearAutoScripts(); err != nil {
+						return err
+					}
+					return nil
+				}
+				var dns *brook.DNS
+				if c.Bool("letBrookDoAllForMe") {
+					if err := s.RunAutoScripts(); err != nil {
+						return err
+					}
+					dns, err = brook.NewDNS(":53", c.String("server"), c.String("password"), "8.8.8.8:53", "223.5.5.5:53", "https://blackwhite.txthinking.com/white.list", c.Int("tcpTimeout"), c.Int("tcpDeadline"), c.Int("udpDeadline"))
+					if err != nil {
+						return err
+					}
+					go func() {
+						if err := dns.ListenAndServe(); err != nil {
+							log.Println(err)
+						}
+					}()
+				}
 				go func() {
 					sigs := make(chan os.Signal, 1)
 					signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 					<-sigs
+					if c.Bool("letBrookDoAllForMe") {
+						if err := s.ClearAutoScripts(); err != nil {
+							log.Println(err)
+						}
+					}
+					if dns != nil {
+						dns.Shutdown()
+					}
 					s.Shutdown()
 				}()
 				return s.ListenAndServe()
@@ -997,6 +1105,14 @@ func main() {
 					Aliases: []string{"s"},
 					Usage:   "Socks5 address",
 				},
+				&cli.StringFlag{
+					Name:  "socks5username",
+					Usage: "Socks5 username",
+				},
+				&cli.StringFlag{
+					Name:  "socks5password",
+					Usage: "Socks5 password",
+				},
 				&cli.IntFlag{
 					Name:  "timeout",
 					Value: 60,
@@ -1016,7 +1132,7 @@ func main() {
 				if debug {
 					enableDebug()
 				}
-				s, err := brook.NewSocks5ToHTTP(c.String("listen"), c.String("socks5"), c.Int("timeout"), c.Int("deadline"))
+				s, err := brook.NewSocks5ToHTTP(c.String("listen"), c.String("socks5"), c.String("socks5username"), c.String("socks5password"), c.Int("timeout"), c.Int("deadline"))
 				if err != nil {
 					return err
 				}
@@ -1059,6 +1175,62 @@ func main() {
 					return err
 				}
 				return nil
+			},
+		},
+		&cli.Command{
+			Name:  "pac",
+			Usage: "Create PAC server or PAC file",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    "proxy",
+					Aliases: []string{"p"},
+					Usage:   "Proxy, like: 'SOCKS5 127.0.0.1:1080; SOCKS 127.0.0.1:1080; DIRECT' [required]",
+				},
+				&cli.StringFlag{
+					Name:    "mode",
+					Aliases: []string{"m"},
+					Usage:   "white/black/global",
+				},
+				&cli.StringFlag{
+					Name:    "domainURL",
+					Aliases: []string{"d"},
+					Usage:   "domain list url, http(s):// or local file path",
+				},
+				&cli.StringFlag{
+					Name:    "cidrURL",
+					Aliases: []string{"c"},
+					Usage:   "CIDR list url, http(s):// or local file path",
+				},
+				&cli.StringFlag{
+					Name:    "listen",
+					Aliases: []string{"l"},
+					Usage:   "PAC server address, like: 127.0.0.1:1980. When you want to create PAC server",
+				},
+				&cli.StringFlag{
+					Name:    "file",
+					Aliases: []string{"f"},
+					Usage:   "File path. When you want to create PAC file",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				if c.String("mode") != "global" && c.String("mode") != "white" && c.String("mode") != "black" {
+					cli.ShowCommandHelp(c, "pac")
+					return nil
+				}
+				p := brook.NewPAC(c.String("listen"), c.String("file"), c.String("proxy"), c.String("mode"), c.String("domainURL"), c.String("cidrURL"))
+				if c.String("listen") != "" {
+					go func() {
+						sigs := make(chan os.Signal, 1)
+						signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+						<-sigs
+						p.Shutdown()
+					}()
+					return p.ListenAndServe()
+				}
+				if c.String("file") != "" {
+					return p.WriteToFile()
+				}
+				return p.WriteToStdout()
 			},
 		},
 	}

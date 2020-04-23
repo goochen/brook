@@ -24,21 +24,24 @@ import (
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
+	"github.com/txthinking/brook/limits"
+	"github.com/txthinking/encrypt"
+	"github.com/txthinking/runnergroup"
 	"github.com/txthinking/socks5"
-	"github.com/txthinking/x"
 )
 
 // SSServer.
 type SSServer struct {
-	Password     []byte
-	TCPAddr      *net.TCPAddr
-	UDPAddr      *net.UDPAddr
-	TCPListen    *net.TCPListener
-	UDPConn      *net.UDPConn
-	UDPExchanges *cache.Cache
-	TCPDeadline  int
-	TCPTimeout   int
-	UDPDeadline  int
+	Password    []byte
+	TCPAddr     *net.TCPAddr
+	UDPAddr     *net.UDPAddr
+	TCPListen   *net.TCPListener
+	UDPConn     *net.UDPConn
+	Cache       *cache.Cache
+	TCPDeadline int
+	TCPTimeout  int
+	UDPDeadline int
+	RunnerGroup *runnergroup.RunnerGroup
 }
 
 // NewSSServer.
@@ -52,28 +55,47 @@ func NewSSServer(addr, password string, tcpTimeout, tcpDeadline, udpDeadline int
 		return nil, err
 	}
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
+	if err := limits.Raise(); err != nil {
+		log.Println("Try to raise system limits, got", err)
+	}
 	s := &SSServer{
-		Password:     MakeSSKey(password),
-		TCPAddr:      taddr,
-		UDPAddr:      uaddr,
-		UDPExchanges: cs,
-		TCPTimeout:   tcpTimeout,
-		TCPDeadline:  tcpDeadline,
-		UDPDeadline:  udpDeadline,
+		Password:    MakeSSKey(password),
+		TCPAddr:     taddr,
+		UDPAddr:     uaddr,
+		Cache:       cs,
+		TCPTimeout:  tcpTimeout,
+		TCPDeadline: tcpDeadline,
+		UDPDeadline: udpDeadline,
+		RunnerGroup: runnergroup.New(),
 	}
 	return s, nil
 }
 
 // ListenAndServe server.
 func (s *SSServer) ListenAndServe() error {
-	errch := make(chan error)
-	go func() {
-		errch <- s.RunTCPServer()
-	}()
-	go func() {
-		errch <- s.RunUDPServer()
-	}()
-	return <-errch
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunTCPServer()
+		},
+		Stop: func() error {
+			if s.TCPListen != nil {
+				return s.TCPListen.Close()
+			}
+			return nil
+		},
+	})
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunUDPServer()
+		},
+		Stop: func() error {
+			if s.UDPConn != nil {
+				return s.UDPConn.Close()
+			}
+			return nil
+		},
+	})
+	return s.RunnerGroup.Wait()
 }
 
 // RunTCPServer starts tcp server.
@@ -120,7 +142,7 @@ func (s *SSServer) RunUDPServer() error {
 	}
 	defer s.UDPConn.Close()
 	for {
-		b := make([]byte, 65536)
+		b := make([]byte, 65535)
 		n, addr, err := s.UDPConn.ReadFromUDP(b)
 		if err != nil {
 			return err
@@ -257,7 +279,7 @@ func (s *SSServer) UDPHandle(addr *net.UDPAddr, b []byte) error {
 	}
 
 	var ue *socks5.UDPExchange
-	iue, ok := s.UDPExchanges.Get(addr.String())
+	iue, ok := s.Cache.Get(addr.String())
 	if ok {
 		ue = iue.(*socks5.UDPExchange)
 		return send(ue, data)
@@ -280,13 +302,13 @@ func (s *SSServer) UDPHandle(addr *net.UDPAddr, b []byte) error {
 		ue.RemoteConn.Close()
 		return err
 	}
-	s.UDPExchanges.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
+	s.Cache.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
 	go func(ue *socks5.UDPExchange) {
 		defer func() {
-			s.UDPExchanges.Delete(ue.ClientAddr.String())
+			s.Cache.Delete(ue.ClientAddr.String())
 			ue.RemoteConn.Close()
 		}()
-		var b [65536]byte
+		var b [65535]byte
 		for {
 			if s.UDPDeadline != 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPDeadline) * time.Second)); err != nil {
@@ -334,13 +356,13 @@ func (s *SSServer) Encrypt(a byte, h, p, d []byte) ([]byte, error) {
 	b = append(b, h...)
 	b = append(b, p...)
 	b = append(b, d...)
-	return x.AESCFBEncrypt(b, s.Password)
+	return encrypt.AESCFBEncrypt(b, s.Password)
 }
 
 // Decrypt data.
 func (s *SSServer) Decrypt(cd []byte) (a byte, addr, port, data []byte, err error) {
 	var bb []byte
-	bb, err = x.AESCFBDecrypt(cd, s.Password)
+	bb, err = encrypt.AESCFBDecrypt(cd, s.Password)
 	if err != nil {
 		return
 	}
@@ -393,15 +415,5 @@ func (s *SSServer) Decrypt(cd []byte) (a byte, addr, port, data []byte, err erro
 
 // Shutdown server.
 func (s *SSServer) Shutdown() error {
-	var err, err1 error
-	if s.TCPListen != nil {
-		err = s.TCPListen.Close()
-	}
-	if s.UDPConn != nil {
-		err1 = s.UDPConn.Close()
-	}
-	if err != nil {
-		return err
-	}
-	return err1
+	return s.RunnerGroup.Done()
 }

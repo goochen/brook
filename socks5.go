@@ -21,6 +21,7 @@ import (
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
+	"github.com/txthinking/brook/limits"
 	"github.com/txthinking/brook/plugin"
 	"github.com/txthinking/socks5"
 )
@@ -46,6 +47,9 @@ func NewSocks5Server(addr, ip, userName, password string, tcpTimeout, tcpDeadlin
 		return nil, err
 	}
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
+	if err := limits.Raise(); err != nil {
+		log.Println("Try to raise system limits, got", err)
+	}
 	x := &Socks5Server{
 		Server:         s5,
 		TCPTimeout:     tcpTimeout,
@@ -64,7 +68,7 @@ func (x *Socks5Server) SetSocks5Middleman(m plugin.Socks5Middleman) {
 
 // ListenAndServe will let client start to listen and serve.
 func (x *Socks5Server) ListenAndServe() error {
-	return x.Server.Run(nil)
+	return x.Server.ListenAndServe(nil)
 }
 
 // ListenAndForward will let client start a proxy to listen and forward to another socks5.
@@ -72,21 +76,18 @@ func (x *Socks5Server) ListenAndForward(addr, username, password string) error {
 	x.ForwardAddress = addr
 	x.ForwardUserName = username
 	x.ForwardPassword = password
-	return x.Server.Run(x)
+	return x.Server.ListenAndServe(x)
 }
 
 // TCPHandle handles tcp request.
 func (x *Socks5Server) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Request) error {
 	if x.Socks5Middleman != nil {
 		done, err := x.Socks5Middleman.TCPHandle(s, c, r)
-		if err != nil {
-			if done {
-				return err
-			}
-			return ErrorReply(r, c, err)
-		}
 		if done {
-			return nil
+			return err
+		}
+		if err != nil {
+			return ErrorReply(r, c, err)
 		}
 	}
 
@@ -122,7 +123,7 @@ func (x *Socks5Server) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Req
 		rp.Atyp = a
 		rp.BndAddr = address
 		rp.BndPort = port
-		if err := rp.WriteTo(c); err != nil {
+		if _, err := rp.WriteTo(c); err != nil {
 			return err
 		}
 		go func() {
@@ -188,7 +189,17 @@ func (x *Socks5Server) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Req
 // UDPHandle handles udp request.
 func (x *Socks5Server) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
 	if x.Socks5Middleman != nil {
-		if done, err := x.Socks5Middleman.UDPHandle(s, addr, d); err != nil || done {
+		done, err := x.Socks5Middleman.UDPHandle(s, addr, d)
+		if done {
+			return err
+		}
+		if err != nil {
+			v, ok := s.TCPUDPAssociate.Get(addr.String())
+			if ok {
+				ch := v.(chan byte)
+				ch <- 0x00
+				s.TCPUDPAssociate.Delete(addr.String())
+			}
 			return err
 		}
 	}
@@ -210,6 +221,12 @@ func (x *Socks5Server) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.
 
 	raddr, ok := x.Cache.Get("RUA")
 	if !ok {
+		v, ok := s.TCPUDPAssociate.Get(addr.String())
+		if ok {
+			ch := v.(chan byte)
+			ch <- 0x00
+			s.TCPUDPAssociate.Delete(addr.String())
+		}
 		return errors.New("Can not find remote udp address.")
 	}
 	tmp, err := Dial.Dial("udp", raddr.(string))
@@ -232,6 +249,7 @@ func (x *Socks5Server) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.
 		if ok {
 			ch := v.(chan byte)
 			ch <- 0x00
+			s.TCPUDPAssociate.Delete(addr.String())
 		}
 		ue.RemoteConn.Close()
 		return err
@@ -243,11 +261,12 @@ func (x *Socks5Server) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.
 			if ok {
 				ch := v.(chan byte)
 				ch <- 0x00
+				s.TCPUDPAssociate.Delete(addr.String())
 			}
 			s.UDPExchanges.Delete(ue.ClientAddr.String())
 			ue.RemoteConn.Close()
 		}()
-		var b [65536]byte
+		var b [65535]byte
 		for {
 			if s.UDPDeadline != 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPDeadline) * time.Second)); err != nil {
@@ -282,5 +301,5 @@ func (x *Socks5Server) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.
 
 // Shutdown used to stop the client.
 func (x *Socks5Server) Shutdown() error {
-	return x.Server.Stop()
+	return x.Server.Shutdown()
 }

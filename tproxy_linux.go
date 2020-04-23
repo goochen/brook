@@ -15,15 +15,23 @@
 package brook
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
+	"github.com/txthinking/brook/limits"
 	"github.com/txthinking/brook/tproxy"
+	"github.com/txthinking/runnergroup"
 	"github.com/txthinking/socks5"
 )
 
@@ -36,10 +44,11 @@ type Tproxy struct {
 	Password      []byte
 	TCPListen     *net.TCPListener
 	UDPConn       *net.UDPConn
-	UDPExchanges  *cache.Cache
+	Cache         *cache.Cache
 	TCPDeadline   int
 	TCPTimeout    int
 	UDPDeadline   int
+	RunnerGroup   *runnergroup.RunnerGroup
 }
 
 // NewTproxy.
@@ -61,30 +70,172 @@ func NewTproxy(addr, remote, password string, tcpTimeout, tcpDeadline, udpDeadli
 		return nil, err
 	}
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
+	if err := limits.Raise(); err != nil {
+		log.Println("Try to raise system limits, got", err)
+	}
 	s := &Tproxy{
 		Password:      []byte(password),
 		TCPAddr:       taddr,
 		UDPAddr:       uaddr,
 		RemoteTCPAddr: rtaddr,
 		RemoteUDPAddr: ruaddr,
-		UDPExchanges:  cs,
+		Cache:         cs,
 		TCPTimeout:    tcpTimeout,
 		TCPDeadline:   tcpDeadline,
 		UDPDeadline:   udpDeadline,
+		RunnerGroup:   runnergroup.New(),
 	}
 	return s, nil
 }
 
+func (s *Tproxy) RunAutoScripts() error {
+	hc := &http.Client{
+		Timeout: 9 * time.Second,
+	}
+	r, err := hc.Get("https://blackwhite.txthinking.com/white_cidr.list")
+	if err != nil {
+		return err
+	}
+	data, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	r.Body.Close()
+	data = bytes.TrimSpace(data)
+	data = bytes.Replace(data, []byte{0x20}, []byte{}, -1)
+	data = bytes.Replace(data, []byte{0x0d, 0x0a}, []byte{0x0a}, -1)
+	cidrl := strings.Split(string(data), "\n")
+
+	c := exec.Command("sh", "-c", "ip rule add fwmark 1 lookup 100")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "ip route add local 0.0.0.0/0 dev lo table 100")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "echo 1 > /proc/sys/net/ipv4/ip_forward")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "modprobe xt_socket")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "modprobe xt_TPROXY")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 0.0.0.0/8 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 10.0.0.0/8 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 127.0.0.0/8 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 169.254.0.0/16 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 172.16.0.0/12 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 192.168.0.0/16 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 224.0.0.0/4 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d 240.0.0.0/4 -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	for _, v := range cidrl {
+		c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d "+v+" -j RETURN")
+		if out, err := c.CombinedOutput(); err != nil {
+			return errors.New(string(out) + err.Error())
+		}
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -d "+s.RemoteTCPAddr.IP.String()+" -j RETURN")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -p tcp -m socket -j MARK --set-mark 1")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -p tcp -j TPROXY --tproxy-mark 0x1/0x1 --on-port "+strconv.Itoa(s.TCPAddr.Port))
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -p udp -m socket -j MARK --set-mark 1")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -A PREROUTING -p udp -j TPROXY --tproxy-mark 0x1/0x1 --on-port "+strconv.Itoa(s.TCPAddr.Port))
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	return nil
+}
+
+func (s *Tproxy) ClearAutoScripts() error {
+	c := exec.Command("sh", "-c", "ip rule del fwmark 1 lookup 100")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "ip route del local 0.0.0.0/0 dev lo table 100")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -F")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	c = exec.Command("sh", "-c", "iptables -t mangle -X")
+	if out, err := c.CombinedOutput(); err != nil {
+		return errors.New(string(out) + err.Error())
+	}
+	return nil
+}
+
 // Run server.
 func (s *Tproxy) ListenAndServe() error {
-	errch := make(chan error)
-	go func() {
-		errch <- s.RunTCPServer()
-	}()
-	go func() {
-		errch <- s.RunUDPServer()
-	}()
-	return <-errch
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunTCPServer()
+		},
+		Stop: func() error {
+			if s.TCPListen != nil {
+				return s.TCPListen.Close()
+			}
+			return nil
+		},
+	})
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunUDPServer()
+		},
+		Stop: func() error {
+			if s.UDPConn != nil {
+				return s.UDPConn.Close()
+			}
+			return nil
+		},
+	})
+	return s.RunnerGroup.Wait()
 }
 
 // RunTCPServer starts tcp server.
@@ -131,7 +282,7 @@ func (s *Tproxy) RunUDPServer() error {
 	}
 	defer s.UDPConn.Close()
 	for {
-		b := make([]byte, 65536)
+		b := make([]byte, 65535)
 		n, saddr, daddr, err := tproxy.ReadFromUDP(s.UDPConn, b)
 		if err != nil {
 			return err
@@ -151,17 +302,7 @@ func (s *Tproxy) RunUDPServer() error {
 
 // Shutdown server.
 func (s *Tproxy) Shutdown() error {
-	var err, err1 error
-	if s.TCPListen != nil {
-		err = s.TCPListen.Close()
-	}
-	if s.UDPConn != nil {
-		err1 = s.UDPConn.Close()
-	}
-	if err != nil {
-		return err
-	}
-	return err1
+	return s.RunnerGroup.Done()
 }
 
 // TCPHandle handles request.
@@ -195,11 +336,11 @@ func (s *Tproxy) TCPHandle(c *net.TCPConn) error {
 	if err != nil {
 		return err
 	}
-	rawaddr := make([]byte, 0, 7)
-	rawaddr = append(rawaddr, a)
-	rawaddr = append(rawaddr, address...)
-	rawaddr = append(rawaddr, port...)
-	n, err = WriteTo(rc, rawaddr, k, n, true)
+	ra := make([]byte, 0, 7)
+	ra = append(ra, a)
+	ra = append(ra, address...)
+	ra = append(ra, port...)
+	n, _, err = WriteTo(rc, ra, k, n, true)
 	if err != nil {
 		return err
 	}
@@ -242,7 +383,7 @@ func (s *Tproxy) TCPHandle(c *net.TCPConn) error {
 		if err != nil {
 			return nil
 		}
-		n, err = WriteTo(rc, b[0:i], k, n, false)
+		n, _, err = WriteTo(rc, b[0:i], k, n, false)
 		if err != nil {
 			return nil
 		}
@@ -250,7 +391,7 @@ func (s *Tproxy) TCPHandle(c *net.TCPConn) error {
 	return nil
 }
 
-type UDPExchange struct {
+type TproxyUDPExchange struct {
 	RemoteConn *net.UDPConn
 	LocalConn  *net.UDPConn
 }
@@ -260,13 +401,13 @@ func (s *Tproxy) UDPHandle(addr, daddr *net.UDPAddr, b []byte) error {
 	if err != nil {
 		return err
 	}
-	rawaddr := make([]byte, 0, 7)
-	rawaddr = append(rawaddr, a)
-	rawaddr = append(rawaddr, address...)
-	rawaddr = append(rawaddr, port...)
-	b = append(rawaddr, b...)
+	ra := make([]byte, 0, 7)
+	ra = append(ra, a)
+	ra = append(ra, address...)
+	ra = append(ra, port...)
+	b = append(ra, b...)
 
-	send := func(ue *UDPExchange, data []byte) error {
+	send := func(ue *TproxyUDPExchange, data []byte) error {
 		cd, err := Encrypt(s.Password, data)
 		if err != nil {
 			return err
@@ -278,10 +419,10 @@ func (s *Tproxy) UDPHandle(addr, daddr *net.UDPAddr, b []byte) error {
 		return nil
 	}
 
-	var ue *UDPExchange
-	iue, ok := s.UDPExchanges.Get(addr.String())
+	var ue *TproxyUDPExchange
+	iue, ok := s.Cache.Get(addr.String())
 	if ok {
-		ue = iue.(*UDPExchange)
+		ue = iue.(*TproxyUDPExchange)
 		return send(ue, b)
 	}
 
@@ -297,7 +438,7 @@ func (s *Tproxy) UDPHandle(addr, daddr *net.UDPAddr, b []byte) error {
 		rc.Close()
 		return errors.New(fmt.Sprintf("src: %s dst: %s %s", daddr.String(), addr.String(), err.Error()))
 	}
-	ue = &UDPExchange{
+	ue = &TproxyUDPExchange{
 		RemoteConn: rc,
 		LocalConn:  c,
 	}
@@ -306,14 +447,14 @@ func (s *Tproxy) UDPHandle(addr, daddr *net.UDPAddr, b []byte) error {
 		ue.LocalConn.Close()
 		return err
 	}
-	s.UDPExchanges.Set(ue.LocalConn.RemoteAddr().String(), ue, cache.DefaultExpiration)
-	go func(ue *UDPExchange) {
+	s.Cache.Set(ue.LocalConn.RemoteAddr().String(), ue, cache.DefaultExpiration)
+	go func(ue *TproxyUDPExchange) {
 		defer func() {
-			s.UDPExchanges.Delete(ue.LocalConn.RemoteAddr().String())
+			s.Cache.Delete(ue.LocalConn.RemoteAddr().String())
 			ue.RemoteConn.Close()
 			ue.LocalConn.Close()
 		}()
-		var b [65536]byte
+		var b [65535]byte
 		for {
 			if s.UDPDeadline != 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPDeadline) * time.Second)); err != nil {

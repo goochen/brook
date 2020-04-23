@@ -12,25 +12,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package brook
+// +build windows
 
-import (
-	"os"
+package limits
 
-	"github.com/mdp/qrterminal"
-	"github.com/txthinking/encrypt"
-)
-
-// Link
-func Link(server, password string) string {
-	s := server + " " + password
-	s = "brook://" + encrypt.URIEscape(s)
-	return s
-}
-
-// QR generate and print QR code.
-func QR(server, password string) {
-	s := server + " " + password
-	s = "brook://" + encrypt.URIEscape(s)
-	qrterminal.GenerateHalfBlock(s, qrterminal.L, os.Stdout)
+func Raise() error {
+	return nil
 }

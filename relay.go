@@ -20,6 +20,8 @@ import (
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
+	"github.com/txthinking/brook/limits"
+	"github.com/txthinking/runnergroup"
 	"github.com/txthinking/socks5"
 )
 
@@ -31,10 +33,11 @@ type Relay struct {
 	RemoteUDPAddr *net.UDPAddr
 	TCPListen     *net.TCPListener
 	UDPConn       *net.UDPConn
-	UDPExchanges  *cache.Cache
+	Cache         *cache.Cache
 	TCPDeadline   int
 	TCPTimeout    int
 	UDPDeadline   int
+	RunnerGroup   *runnergroup.RunnerGroup
 }
 
 // NewRelay returns a Relay.
@@ -56,29 +59,48 @@ func NewRelay(addr, remote string, tcpTimeout, tcpDeadline, udpDeadline int) (*R
 		return nil, err
 	}
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
+	if err := limits.Raise(); err != nil {
+		log.Println("Try to raise system limits, got", err)
+	}
 	s := &Relay{
 		TCPAddr:       taddr,
 		UDPAddr:       uaddr,
 		RemoteTCPAddr: rtaddr,
 		RemoteUDPAddr: ruaddr,
-		UDPExchanges:  cs,
+		Cache:         cs,
 		TCPTimeout:    tcpTimeout,
 		TCPDeadline:   tcpDeadline,
 		UDPDeadline:   udpDeadline,
+		RunnerGroup:   runnergroup.New(),
 	}
 	return s, nil
 }
 
 // Run server.
 func (s *Relay) ListenAndServe() error {
-	errch := make(chan error)
-	go func() {
-		errch <- s.RunTCPServer()
-	}()
-	go func() {
-		errch <- s.RunUDPServer()
-	}()
-	return <-errch
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunTCPServer()
+		},
+		Stop: func() error {
+			if s.TCPListen != nil {
+				return s.TCPListen.Close()
+			}
+			return nil
+		},
+	})
+	s.RunnerGroup.Add(&runnergroup.Runner{
+		Start: func() error {
+			return s.RunUDPServer()
+		},
+		Stop: func() error {
+			if s.UDPConn != nil {
+				return s.UDPConn.Close()
+			}
+			return nil
+		},
+	})
+	return s.RunnerGroup.Wait()
 }
 
 // RunTCPServer starts tcp server.
@@ -125,7 +147,7 @@ func (s *Relay) RunUDPServer() error {
 	}
 	defer s.UDPConn.Close()
 	for {
-		b := make([]byte, 65536)
+		b := make([]byte, 65535)
 		n, addr, err := s.UDPConn.ReadFromUDP(b)
 		if err != nil {
 			return err
@@ -142,17 +164,7 @@ func (s *Relay) RunUDPServer() error {
 
 // Shutdown server.
 func (s *Relay) Shutdown() error {
-	var err, err1 error
-	if s.TCPListen != nil {
-		err = s.TCPListen.Close()
-	}
-	if s.UDPConn != nil {
-		err1 = s.UDPConn.Close()
-	}
-	if err != nil {
-		return err
-	}
-	return err1
+	return s.RunnerGroup.Done()
 }
 
 // TCPHandle handles request.
@@ -220,7 +232,7 @@ func (s *Relay) UDPHandle(addr *net.UDPAddr, b []byte) error {
 	}
 
 	var ue *socks5.UDPExchange
-	iue, ok := s.UDPExchanges.Get(addr.String())
+	iue, ok := s.Cache.Get(addr.String())
 	if ok {
 		ue = iue.(*socks5.UDPExchange)
 		return send(ue, b)
@@ -239,13 +251,13 @@ func (s *Relay) UDPHandle(addr *net.UDPAddr, b []byte) error {
 		ue.RemoteConn.Close()
 		return err
 	}
-	s.UDPExchanges.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
+	s.Cache.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
 	go func(ue *socks5.UDPExchange) {
 		defer func() {
-			s.UDPExchanges.Delete(ue.ClientAddr.String())
+			s.Cache.Delete(ue.ClientAddr.String())
 			ue.RemoteConn.Close()
 		}()
-		var b [65536]byte
+		var b [65535]byte
 		for {
 			if s.UDPDeadline != 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPDeadline) * time.Second)); err != nil {

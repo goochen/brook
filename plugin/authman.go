@@ -12,16 +12,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// +build darwin
-// +build amd64 386
+package plugin
 
-package sysproxy
+// ClientAuthman is used to provide extra authentication mechanism.
+type ClientAuthman interface {
+	// GetToken is used for client to prepare token.
+	GetToken() ([]byte, error)
+}
 
-import (
-	"log"
-	"testing"
-)
+// ServerAuthman is used to provide extra authentication mechanism
+type ServerAuthman interface {
+	// VerifyToken is used for server to verify token.
+	VerifyToken(token []byte, network string, a byte, dst string, b []byte) (Internet, error)
+}
 
-func TestGetNetworkService(t *testing.T) {
-	log.Println(TurnOffSystemProxy())
+type Internet interface {
+	TCPEgress(int) error
+	UDPEgress(int) error
+	Close() error
 }

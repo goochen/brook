@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/txthinking/encrypt"
 	"github.com/txthinking/socks5"
 	"github.com/txthinking/x"
 )
@@ -43,7 +44,7 @@ func ReadFrom(c net.Conn, k, n []byte, hasTime bool) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	n = IncrementNonce(n)
-	d, err := x.AESGCMDecrypt(b, k, n)
+	d, err := encrypt.AESGCMDecrypt(b, k, n)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -54,7 +55,7 @@ func ReadFrom(c net.Conn, k, n []byte, hasTime bool) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	n = IncrementNonce(n)
-	d, err = x.AESGCMDecrypt(b, k, n)
+	d, err = encrypt.AESGCMDecrypt(b, k, n)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -74,7 +75,7 @@ func ReadFrom(c net.Conn, k, n []byte, hasTime bool) ([]byte, []byte, error) {
 }
 
 // WriteTo.
-func WriteTo(c net.Conn, d, k, n []byte, needTime bool) ([]byte, error) {
+func WriteTo(c net.Conn, d, k, n []byte, needTime bool) ([]byte, int, error) {
 	if needTime {
 		d = append(bytes.NewBufferString(strconv.Itoa(int(time.Now().Unix()))).Bytes(), d...)
 	}
@@ -83,33 +84,35 @@ func WriteTo(c net.Conn, d, k, n []byte, needTime bool) ([]byte, error) {
 	bb := make([]byte, 2)
 	binary.BigEndian.PutUint16(bb, uint16(i))
 	n = IncrementNonce(n)
-	b, err := x.AESGCMEncrypt(bb, k, n)
+	b, err := encrypt.AESGCMEncrypt(bb, k, n)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if _, err := c.Write(b); err != nil {
-		return nil, err
+	var l int
+	if l, err = c.Write(b); err != nil {
+		return nil, 0, err
 	}
 
 	n = IncrementNonce(n)
-	b, err = x.AESGCMEncrypt(d, k, n)
+	b, err = encrypt.AESGCMEncrypt(d, k, n)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if _, err := c.Write(b); err != nil {
-		return nil, err
+	var l1 int
+	if l1, err = c.Write(b); err != nil {
+		return nil, 0, err
 	}
-	return n, nil
+	return n, l + l1, nil
 }
 
 // PrepareKey.
 func PrepareKey(p []byte) ([]byte, []byte, error) {
-	return x.HkdfSha256RandomSalt(p, []byte{0x62, 0x72, 0x6f, 0x6f, 0x6b}, 12)
+	return encrypt.HkdfSha256RandomSalt(p, []byte{0x62, 0x72, 0x6f, 0x6f, 0x6b}, 12)
 }
 
 // GetKey.
 func GetKey(p, n []byte) ([]byte, error) {
-	return x.HkdfSha256WithSalt(p, n, []byte{0x62, 0x72, 0x6f, 0x6f, 0x6b})
+	return encrypt.HkdfSha256WithSalt(p, n, []byte{0x62, 0x72, 0x6f, 0x6f, 0x6b})
 }
 
 // Encrypt data length.
@@ -123,7 +126,7 @@ func EncryptLength(p, b []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err = x.AESGCMEncrypt(b, k, n)
+	b, err = encrypt.AESGCMEncrypt(b, k, n)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +140,7 @@ func DecryptLength(p, b []byte) (int, error) {
 		return 0, errors.New("Data length error")
 	}
 	k, err := GetKey(p, b[0:12])
-	bb, err := x.AESGCMDecrypt(b[12:], k, b[0:12])
+	bb, err := encrypt.AESGCMDecrypt(b[12:], k, b[0:12])
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +163,7 @@ func Encrypt(p, b []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err = x.AESGCMEncrypt(b, k, n)
+	b, err = encrypt.AESGCMEncrypt(b, k, n)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +178,7 @@ func Decrypt(p, b []byte) (a byte, addr, port, data []byte, err error) {
 		return
 	}
 	k, err := GetKey(p, b[0:12])
-	bb, err := x.AESGCMDecrypt(b[12:], k, b[0:12])
+	bb, err := encrypt.AESGCMDecrypt(b[12:], k, b[0:12])
 	if err != nil {
 		return
 	}

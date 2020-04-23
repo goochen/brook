@@ -25,9 +25,10 @@ import (
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
+	"github.com/txthinking/brook/limits"
 	"github.com/txthinking/brook/plugin"
+	"github.com/txthinking/encrypt"
 	"github.com/txthinking/socks5"
-	xx "github.com/txthinking/x"
 )
 
 // SSClient.
@@ -41,6 +42,7 @@ type SSClient struct {
 	TCPListen       *net.TCPListener
 	Socks5Middleman plugin.Socks5Middleman
 	HTTPMiddleman   plugin.HTTPMiddleman
+	Cache           *cache.Cache
 }
 
 // NewSSClient returns a new SSClient.
@@ -49,6 +51,10 @@ func NewSSClient(addr, ip, server, password string, tcpTimeout, tcpDeadline, udp
 	if err != nil {
 		return nil, err
 	}
+	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
+	if err := limits.Raise(); err != nil {
+		log.Println("Try to raise system limits, got", err)
+	}
 	x := &SSClient{
 		RemoteAddr:  server,
 		Server:      s5,
@@ -56,6 +62,7 @@ func NewSSClient(addr, ip, server, password string, tcpTimeout, tcpDeadline, udp
 		TCPTimeout:  tcpTimeout,
 		TCPDeadline: tcpDeadline,
 		UDPDeadline: udpDeadline,
+		Cache:       cs,
 	}
 	return x, nil
 }
@@ -72,21 +79,18 @@ func (x *SSClient) SetHTTPMiddleman(m plugin.HTTPMiddleman) {
 
 // ListenAndServe will let client start a socks5 proxy.
 func (x *SSClient) ListenAndServe() error {
-	return x.Server.Run(x)
+	return x.Server.ListenAndServe(x)
 }
 
 // TCPHandle handles tcp request.
 func (x *SSClient) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Request) error {
 	if x.Socks5Middleman != nil {
 		done, err := x.Socks5Middleman.TCPHandle(s, c, r)
-		if err != nil {
-			if done {
-				return err
-			}
-			return ErrorReply(r, c, err)
-		}
 		if done {
-			return nil
+			return err
+		}
+		if err != nil {
+			return ErrorReply(r, c, err)
 		}
 	}
 
@@ -111,11 +115,11 @@ func (x *SSClient) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Request
 		if err != nil {
 			return ErrorReply(r, c, err)
 		}
-		rawaddr := make([]byte, 0, 7)
-		rawaddr = append(rawaddr, r.Atyp)
-		rawaddr = append(rawaddr, r.DstAddr...)
-		rawaddr = append(rawaddr, r.DstPort...)
-		if _, err := crc.Write(rawaddr); err != nil {
+		ra := make([]byte, 0, 7)
+		ra = append(ra, r.Atyp)
+		ra = append(ra, r.DstAddr...)
+		ra = append(ra, r.DstPort...)
+		if _, err := crc.Write(ra); err != nil {
 			return ErrorReply(r, c, err)
 		}
 		a, address, port, err := socks5.ParseAddress(rc.LocalAddr().String())
@@ -124,7 +128,7 @@ func (x *SSClient) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Request
 		}
 
 		rp := socks5.NewReply(socks5.RepSuccess, a, address, port)
-		if err := rp.WriteTo(c); err != nil {
+		if _, err := rp.WriteTo(c); err != nil {
 			return err
 		}
 
@@ -191,7 +195,17 @@ func (x *SSClient) TCPHandle(s *socks5.Server, c *net.TCPConn, r *socks5.Request
 // UDPHandle handles udp request.
 func (x *SSClient) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
 	if x.Socks5Middleman != nil {
-		if done, err := x.Socks5Middleman.UDPHandle(s, addr, d); err != nil || done {
+		done, err := x.Socks5Middleman.UDPHandle(s, addr, d)
+		if done {
+			return err
+		}
+		if err != nil {
+			v, ok := s.TCPUDPAssociate.Get(addr.String())
+			if ok {
+				ch := v.(chan byte)
+				ch <- 0x00
+				s.TCPUDPAssociate.Delete(addr.String())
+			}
 			return err
 		}
 	}
@@ -209,7 +223,7 @@ func (x *SSClient) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Data
 	}
 
 	var ue *socks5.UDPExchange
-	iue, ok := s.UDPExchanges.Get(addr.String())
+	iue, ok := x.Cache.Get(addr.String())
 	if ok {
 		ue = iue.(*socks5.UDPExchange)
 		return send(ue, d.Bytes()[3:])
@@ -221,6 +235,7 @@ func (x *SSClient) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Data
 		if ok {
 			ch := v.(chan byte)
 			ch <- 0x00
+			s.TCPUDPAssociate.Delete(addr.String())
 		}
 		return err
 	}
@@ -234,22 +249,24 @@ func (x *SSClient) UDPHandle(s *socks5.Server, addr *net.UDPAddr, d *socks5.Data
 		if ok {
 			ch := v.(chan byte)
 			ch <- 0x00
+			s.TCPUDPAssociate.Delete(addr.String())
 		}
 		ue.RemoteConn.Close()
 		return err
 	}
-	s.UDPExchanges.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
+	x.Cache.Set(ue.ClientAddr.String(), ue, cache.DefaultExpiration)
 	go func(ue *socks5.UDPExchange) {
 		defer func() {
 			v, ok := s.TCPUDPAssociate.Get(ue.ClientAddr.String())
 			if ok {
 				ch := v.(chan byte)
 				ch <- 0x00
+				s.TCPUDPAssociate.Delete(addr.String())
 			}
-			s.UDPExchanges.Delete(ue.ClientAddr.String())
+			x.Cache.Delete(ue.ClientAddr.String())
 			ue.RemoteConn.Close()
 		}()
-		var b [65536]byte
+		var b [65535]byte
 		for {
 			if s.UDPDeadline != 0 {
 				if err := ue.RemoteConn.SetDeadline(time.Now().Add(time.Duration(s.UDPDeadline) * time.Second)); err != nil {
@@ -344,14 +361,18 @@ func (x *SSClient) HTTPHandle(c *net.TCPConn) error {
 	}
 	if method != "CONNECT" {
 		var err error
-		addr, err = xx.GetAddressFromURL(aoru)
+		addr, err = GetAddressFromURL(aoru)
 		if err != nil {
 			return err
 		}
 	}
 
 	if x.HTTPMiddleman != nil {
-		if done, err := x.HTTPMiddleman.Handle(method, addr, b, c); err != nil || done {
+		done, err := x.HTTPMiddleman.Handle(method, addr, b, c)
+		if done {
+			return err
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -381,11 +402,11 @@ func (x *SSClient) HTTPHandle(c *net.TCPConn) error {
 		return err
 	}
 
-	rawaddr := make([]byte, 0)
-	rawaddr = append(rawaddr, a)
-	rawaddr = append(rawaddr, h...)
-	rawaddr = append(rawaddr, p...)
-	if _, err := crc.Write(rawaddr); err != nil {
+	ra := make([]byte, 0)
+	ra = append(ra, a)
+	ra = append(ra, h...)
+	ra = append(ra, p...)
+	if _, err := crc.Write(ra); err != nil {
 		return err
 	}
 	if method == "CONNECT" {
@@ -454,13 +475,13 @@ func (x *SSClient) WrapCipherConn(conn *net.TCPConn) (*CipherConn, error) {
 
 // Encrypt data.
 func (x *SSClient) Encrypt(rawdata []byte) ([]byte, error) {
-	return xx.AESCFBEncrypt(rawdata, x.Password)
+	return encrypt.AESCFBEncrypt(rawdata, x.Password)
 }
 
 // Decrypt data.
 func (x *SSClient) Decrypt(cd []byte) (a byte, addr, port, data []byte, err error) {
 	var bb []byte
-	bb, err = xx.AESCFBDecrypt(cd, x.Password)
+	bb, err = encrypt.AESCFBDecrypt(cd, x.Password)
 	if err != nil {
 		return
 	}
@@ -513,5 +534,14 @@ func (x *SSClient) Decrypt(cd []byte) (a byte, addr, port, data []byte, err erro
 
 // Shutdown used to stop the client.
 func (x *SSClient) Shutdown() error {
-	return x.Server.Stop()
+	var e error
+	if x.TCPListen != nil {
+		if err := x.TCPListen.Close(); err != nil {
+			e = err
+		}
+	}
+	if err := x.Server.Shutdown(); err != nil {
+		e = err
+	}
+	return e
 }

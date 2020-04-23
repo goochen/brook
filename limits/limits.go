@@ -12,25 +12,31 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package brook
+// +build !windows
+
+package limits
 
 import (
-	"os"
-
-	"github.com/mdp/qrterminal"
-	"github.com/txthinking/encrypt"
+	"runtime"
+	"syscall"
 )
 
-// Link
-func Link(server, password string) string {
-	s := server + " " + password
-	s = "brook://" + encrypt.URIEscape(s)
-	return s
-}
-
-// QR generate and print QR code.
-func QR(server, password string) {
-	s := server + " " + password
-	s = "brook://" + encrypt.URIEscape(s)
-	qrterminal.GenerateHalfBlock(s, qrterminal.L, os.Stdout)
+func Raise() error {
+	var l syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &l); err != nil {
+		return err
+	}
+	if runtime.GOOS == "darwin" && l.Cur < 10240 {
+		l.Cur = 10240
+	}
+	if runtime.GOOS != "darwin" && l.Cur < 60000 {
+		if l.Max < 60000 {
+			l.Max = 60000 // with CAP_SYS_RESOURCE capability
+		}
+		l.Cur = l.Max
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &l); err != nil {
+		return err
+	}
+	return nil
 }
