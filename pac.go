@@ -13,43 +13,42 @@ import (
 
 	"github.com/tdewolff/minify"
 	"github.com/tdewolff/minify/js"
-	"github.com/txthinking/x"
 )
 
 type PAC struct {
-	Addr string
-	File string
-	// global/white/black
+	Addr       string
+	File       string
 	Proxy      string
-	Mode       string
 	DomainURL  string
-	CidrURL    string
 	DomainData []byte
-	CidrData   []byte
 	HTTPServer *http.Server
+	Body       []byte
 }
 
-func NewPAC(addr, file, proxy, mode, domainURL, cidrURL string) *PAC {
-	return &PAC{
+func NewPAC(addr, file, proxy, domainURL string) *PAC {
+	p := &PAC{
 		Addr:      addr,
 		File:      file,
 		Proxy:     proxy,
-		Mode:      mode,
 		DomainURL: domainURL,
-		CidrURL:   cidrURL,
 	}
+	mux := http.NewServeMux()
+	mux.Handle("/", p)
+	p.HTTPServer = &http.Server{
+		Addr:           p.Addr,
+		ReadTimeout:    5 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+		Handler:        mux,
+	}
+	return p
 }
 
 func (p *PAC) MakeBody() (io.Reader, error) {
 	var err error
 	if p.DomainURL != "" {
 		p.DomainData, err = readURL(p.DomainURL)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if p.CidrURL != "" {
-		p.CidrData, err = readURL(p.CidrURL)
 		if err != nil {
 			return nil, err
 		}
@@ -61,31 +60,6 @@ func (p *PAC) MakeBody() (io.Reader, error) {
 		b = bytes.Replace(b, []byte{0x0d, 0x0a}, []byte{0x0a}, -1)
 		ds = strings.Split(string(b), "\n")
 	}
-	cs := make([]map[string]int64, 0)
-	if p.CidrData != nil {
-		b := bytes.TrimSpace(p.CidrData)
-		b = bytes.Replace(b, []byte{0x20}, []byte{}, -1)
-		b = bytes.Replace(b, []byte{0x0d, 0x0a}, []byte{0x0a}, -1)
-		ss := strings.Split(string(b), "\n")
-		for _, s := range ss {
-			c, err := x.CIDR(s)
-			if err != nil {
-				continue
-			}
-			first, err := x.IP2Decimal(c.First)
-			if err != nil {
-				continue
-			}
-			last, err := x.IP2Decimal(c.Last)
-			if err != nil {
-				continue
-			}
-			m := make(map[string]int64)
-			m["first"] = first
-			m["last"] = last
-			cs = append(cs, m)
-		}
-	}
 
 	t := template.New("pac")
 	t, err = t.Parse(tpl)
@@ -95,9 +69,7 @@ func (p *PAC) MakeBody() (io.Reader, error) {
 	b := &bytes.Buffer{}
 	if err := t.Execute(b, map[string]interface{}{
 		"proxy":   p.Proxy,
-		"mode":    p.Mode,
 		"domains": ds,
-		"cidrs":   cs,
 	}); err != nil {
 		return nil, err
 	}
@@ -110,25 +82,19 @@ func (p *PAC) MakeBody() (io.Reader, error) {
 	return b1, nil
 }
 
+func (p *PAC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	w.Write(p.Body)
+}
+
 func (p *PAC) ListenAndServe() error {
 	r, err := p.MakeBody()
 	if err != nil {
 		return err
 	}
-	b, err := ioutil.ReadAll(r)
+	p.Body, err = ioutil.ReadAll(r)
 	if err != nil {
 		return err
-	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-		w.Write(b)
-	})
-	p.HTTPServer = &http.Server{
-		Addr:           p.Addr,
-		ReadTimeout:    5 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		IdleTimeout:    120 * time.Second,
-		MaxHeaderBytes: 1 << 20,
 	}
 	return p.HTTPServer.ListenAndServe()
 }
@@ -189,21 +155,13 @@ func readURL(url string) ([]byte, error) {
 var tpl = `
 var proxy="{{.proxy}}";
 
-var mode = "{{.mode}}";
-
 var domains = {
 	{{range .domains}}
 	"{{.}}": 1,
 	{{end}}
 };
 
-var cidrs = [
-    {{range .cidrs}}
-    [{{.first}},{{.last}}],
-	{{end}}
-];
-
-function ip2decimal(ip) {
+function ip4todecimal(ip) {
     var d = ip.split('.');
     return ((((((+d[0])*256)+(+d[1]))*256)+(+d[2]))*256)+(+d[3]);
 }
@@ -216,62 +174,18 @@ function FindProxyForURL(url, host){
                 isInNet(dnsResolve(host), "127.0.0.0", "255.255.255.0")){
             return "DIRECT";
         }
-		if(mode == "global"){
-			return proxy;
-		}
-        var d = ip2decimal(host);
-        var l = cidrs.length;
-        var min = 0;
-        var max = l;
-        for(;;){
-            if (min+1 > max) {
-                break;
-            }
-            var mid = Math.floor(min+(max-min)/2);
-            if(d >= cidrs[mid][0] && d <= cidrs[mid][1]){
-				if(mode == "white"){
-					return "DIRECT";
-				}
-				if(mode == "black"){
-					return proxy;
-				}
-            }else if(d < cidrs[mid][0]){
-                max = mid;
-            }else{
-                min = mid+1;
-            }
-        }
-		if(mode == "white"){
-			return proxy;
-		}
-		if(mode == "black"){
-			return "DIRECT";
-		}
+		return "DIRECT";
     }
-
     if (isPlainHostName(host)){
         return "DIRECT";
     }
 
-	if(mode == "global"){
-		return proxy;
-	}
     var a = host.split(".");
     for(var i=a.length-1; i>=0; i--){
         if (domains.hasOwnProperty(a.slice(i).join("."))){
-			if(mode == "white"){
-				return "DIRECT";
-			}
-			if(mode == "black"){
-				return proxy;
-			}
+			return "DIRECT";
         }
     }
-	if(mode == "white"){
-		return proxy;
-	}
-	if(mode == "black"){
-		return "DIRECT";
-	}
+	return proxy;
 }
 `
